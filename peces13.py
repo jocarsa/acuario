@@ -159,14 +159,15 @@ class Pez:
             self.target_angle = (self.a + math.pi) % (2 * math.pi)
 
 class Comida:
-    def __init__(self):
-        self.x = random.uniform(0, width)
-        self.y = random.uniform(0, height)
+    def __init__(self, x=None, y=None, radius=None, angle=None):
+        # Initialize with provided values if given (for splitting), else randomize
+        self.x = x if x is not None else random.uniform(0, width)
+        self.y = y if y is not None else random.uniform(0, height)
+        self.radio = radius if radius is not None else random.uniform(5, 15)
+        self.a = angle if angle is not None else random.uniform(0, math.pi * 2)
+        self.v = random.uniform(0, 0.25)
         self.visible = True
         self.vida = 0
-        self.radio = random.uniform(0, 10)
-        self.a = random.uniform(0, math.pi * 2)
-        self.v = random.uniform(0, 0.25)
         self.transparencia = 1.0
 
     def dibuja(self, frame):
@@ -177,14 +178,14 @@ class Comida:
 
     def vive(self, frame):
         # Wandering logic
-        if random.random() < 0.1:  # Change direction randomly with a 10% chance
-            self.a += (random.random() - 0.5) * 0.2  # Small angle adjustment for wandering
+        if random.random() < 0.1:
+            self.a += (random.random() - 0.5) * 0.2
 
-        # Update position based on angle and speed
+        # Move based on direction and speed
         self.x += math.cos(self.a) * self.v
         self.y += math.sin(self.a) * self.v
 
-        # Boundary check to keep food within the frame
+        # Boundary conditions
         if self.x < 0:
             self.x = 0
             self.a = -self.a
@@ -198,8 +199,33 @@ class Comida:
             self.y = height
             self.a = math.pi - self.a
 
+        # Handle life cycle and division
         self.vida += 1
+        if self.vida % fps == 0 and self.radio >= 2:  # Divide every second if radius is >= 2
+            self.divide()
+
+        # Remove particle if too small
+        if self.radio < 1:
+            self.visible = False
+
         self.dibuja(frame)
+
+    def divide(self):
+        # Create two new particles with half the radius and opposite directions
+        angle_offset = math.pi  # 180 degrees
+        child_radius = self.radio / 1.5
+
+        if child_radius >= 1:
+            # Create two new particles in opposite directions
+            food1 = Comida(self.x, self.y, child_radius, self.a)
+            food2 = Comida(self.x, self.y, child_radius, (self.a + angle_offset) % (2 * math.pi))
+            
+            # Add new particles to the global list
+            comidas.extend([food1, food2])
+
+        # Mark this particle as invisible to "remove" it
+        self.visible = False
+
 
 # Initialize fishes and food
 numeropeces = 200
