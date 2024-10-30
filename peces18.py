@@ -8,7 +8,7 @@ import time
 # Video settings
 width, height = 1920, 1080
 fps = 30
-duration = 60*60  # seconds
+duration = 60*60*12  # seconds
 total_frames = fps * duration
 
 # Prepare video directory
@@ -66,6 +66,12 @@ class Pez:
         else:
             color_main = (128, 128, 128)
 
+        # Add breathing effect with mouth
+        mouth_radius = max(int(math.sin(self.tiempo * 2) * 2 + 3), 1)
+        x_mouth = int(self.x + math.cos(self.a) * 5 * self.edad)
+        y_mouth = int(self.y + math.sin(self.a) * 5 * self.edad)
+        cv2.circle(frame, (x_mouth, y_mouth), mouth_radius, color_main, -1, cv2.LINE_AA)
+
         for i in range(-1, self.numeroelementos):
             if i == 1:
                 for sign in [-1, 1]:
@@ -94,7 +100,6 @@ class Pez:
             y_tail = int(self.y - (i - 3) * math.sin(self.a) * 2 * self.edad + math.cos(self.a) * math.sin((i / 5) - self.tiempo) * 4)
             radius_tail = max(int(-self.edad * 0.4 * (self.numeroelementos - i) * 2 + 1), 1)
             cv2.circle(frame, (x_tail, y_tail), radius_tail, color_main, -1, cv2.LINE_AA)
-
     def vive(self, frame):
         if random.random() < 0.002:
             self.direcciongiro = -self.direcciongiro
@@ -109,6 +114,33 @@ class Pez:
             self.dibuja(frame)
 
     def mueve(self):
+        # Avoidance logic
+        repulsion_radius = 50
+        repulsion_force = 0.05  # How strongly the fish should avoid nearby fish
+        avg_repulsion_x, avg_repulsion_y = 0, 0
+        nearby_fish_count = 0
+
+        for other_fish in peces:
+            if other_fish != self:
+                dist = math.hypot(self.x - other_fish.x, self.y - other_fish.y)
+                if dist < repulsion_radius:
+                    # Compute repulsion vector
+                    repulsion_x = self.x - other_fish.x
+                    repulsion_y = self.y - other_fish.y
+                    avg_repulsion_x += repulsion_x / dist  # Normalize and add
+                    avg_repulsion_y += repulsion_y / dist
+                    nearby_fish_count += 1
+
+        # If there are nearby fish to avoid, adjust target angle
+        if nearby_fish_count > 0:
+            avg_repulsion_x /= nearby_fish_count
+            avg_repulsion_y /= nearby_fish_count
+            avoidance_angle = math.atan2(avg_repulsion_y, avg_repulsion_x)
+            
+            # Blend avoidance angle with the current target angle
+            self.target_angle = (self.target_angle + avoidance_angle * repulsion_force) % (2 * math.pi)
+
+        # Regular movement logic
         angle_diff = angle_difference(self.a, self.target_angle)
         if abs(angle_diff) > self.max_turn_rate:
             angle_change = self.max_turn_rate if angle_diff > 0 else -self.max_turn_rate
@@ -127,14 +159,15 @@ class Pez:
             self.target_angle = (self.a + math.pi) % (2 * math.pi)
 
 class Comida:
-    def __init__(self):
-        self.x = random.uniform(0, width)
-        self.y = random.uniform(0, height)
+    def __init__(self, x=None, y=None, radius=None, angle=None):
+        # Initialize with provided values if given (for splitting), else randomize
+        self.x = x if x is not None else random.uniform(0, width)
+        self.y = y if y is not None else random.uniform(0, height)
+        self.radio = radius if radius is not None else random.uniform(5, 15)
+        self.a = angle if angle is not None else random.uniform(0, math.pi * 2)
+        self.v = random.uniform(0, 0.25)
         self.visible = True
         self.vida = 0
-        self.radio = random.uniform(0, 10)
-        self.a = random.uniform(0, math.pi * 2)
-        self.v = random.uniform(0, 0.25)
         self.transparencia = 1.0
 
     def dibuja(self, frame):
@@ -144,18 +177,65 @@ class Comida:
             cv2.circle(frame, (int(self.x), int(self.y)), radius, color, -1, cv2.LINE_AA)
 
     def vive(self, frame):
+        # Wandering logic
+        if random.random() < 0.1:
+            self.a += (random.random() - 0.5) * 0.2
+
+        # Move based on direction and speed
+        self.x += math.cos(self.a) * self.v
+        self.y += math.sin(self.a) * self.v
+
+        # Boundary conditions
+        if self.x < 0:
+            self.x = 0
+            self.a = -self.a
+        elif self.x > width:
+            self.x = width
+            self.a = -self.a
+        if self.y < 0:
+            self.y = 0
+            self.a = math.pi - self.a
+        elif self.y > height:
+            self.y = height
+            self.a = math.pi - self.a
+
+        # Handle life cycle and division
         self.vida += 1
+        if self.vida % fps == 0 and self.radio >= 2:  # Divide every second if radius is >= 2
+            self.divide()
+
+        # Remove particle if too small
+        if self.radio < 1:
+            self.visible = False
+
         self.dibuja(frame)
 
+    def divide(self):
+        # Create two new particles with half the radius and opposite directions
+        angle_offset = math.pi  # 180 degrees
+        child_radius = self.radio / 1.4
+
+        if child_radius >= 1:
+            # Create two new particles in opposite directions
+            food1 = Comida(self.x, self.y, child_radius, self.a)
+            food2 = Comida(self.x, self.y, child_radius, (self.a + angle_offset) % (2 * math.pi))
+            
+            # Add new particles to the global list
+            comidas.extend([food1, food2])
+
+        # Mark this particle as invisible to "remove" it
+        self.visible = False
+
+
 # Initialize fishes and food
-numeropeces = 200
+numeropeces = 20
 peces = [Pez() for _ in range(numeropeces)]
 comidas = [Comida()]
 
 # Main loop
 for frame_count in range(total_frames):
     frame = np.zeros((height, width, 3), dtype=np.uint8)
-    if random.random() < 0.01:
+    if random.random() < 0.00002*numeropeces:
         comidas.append(Comida())
     for comida in comidas:
         comida.vive(frame)

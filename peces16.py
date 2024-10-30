@@ -35,20 +35,38 @@ def angle_difference(beta, alpha):
 def angle_in_radians(x1, y1, x2, y2):
     return math.atan2(y2 - y1, x2 - x1)
 
+class Particle:
+    def __init__(self, x, y, radius, color):
+        self.x = x
+        self.y = y
+        self.radius = radius
+        self.color = color
+        self.visible = True
+
+    def update(self):
+        # Decrease radius over time
+        self.radius -= 0.1  # Adjust the decrease rate as desired
+        if self.radius <= 0:
+            self.visible = False
+
+    def draw(self, frame):
+        if self.visible and self.radius > 0:
+            cv2.circle(frame, (int(self.x), int(self.y)), int(self.radius), self.color, -1, cv2.LINE_AA)
+
 class Pez:
     def __init__(self):
+        # Initial attributes for fish properties
         self.x = random.uniform(0, width)
         self.y = random.uniform(0, height)
         self.a = random.uniform(0, math.pi * 2)
         self.edad = (random.uniform(2, 4)) / 2
         self.tiempo = random.uniform(0, 1)
         self.avancevida = random.uniform(0, 0.1)
-        self.sexo = random.randint(0, 1)
-        
-        # Color aleatorio independiente del sexo
+        self.sexo = random.randint(0, 1)  # 0 = male, 1 = female
         self.color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-        
         self.energia = random.uniform(0, 1)
+        
+        # Additional attributes for appearance and behavior
         self.direcciongiro = random.choice([-1, 0, 1])
         self.numeroelementos = 10
         self.numeroelementoscola = 5
@@ -57,20 +75,64 @@ class Pez:
         self.colorb = [self.color[2] + random.randint(-50, 50) for _ in range(-1, self.numeroelementos)]
         self.anguloanterior = 0
         self.giro = 0
-        self.max_turn_rate = random.uniform(0.005, 0.01)  # Reduced turn rate for slower, arcing movement
-        self.target_angle = self.a  # Desired angle
+        self.max_turn_rate = random.uniform(0.005, 0.01)
+        self.target_angle = self.a
+
+        # Reproduction control
+        self.is_mating = False
+        self.mate_target = None
+
+        # New attributes for death and particles
+        self.alive = True
+        self.body_parts = []  # Initialize body parts here
+
+    def mate(self, other):
+        # Create two offspring with inherited traits
+        offspring1 = Pez()
+        offspring2 = Pez()
+        
+        # Inherit or mix specific traits from parents
+        offspring1.color = self.color if random.random() < 0.5 else other.color
+        offspring2.color = other.color if random.random() < 0.5 else self.color
+        offspring1.avancevida = (self.avancevida + other.avancevida) / 2
+        offspring2.avancevida = (self.avancevida + other.avancevida) / 2
+        offspring1.sexo = random.randint(0, 1)
+        offspring2.sexo = random.randint(0, 1)
+        
+        # Position offspring near parents
+        offspring1.x = self.x + random.uniform(-10, 10)
+        offspring1.y = self.y + random.uniform(-10, 10)
+        offspring2.x = self.x + random.uniform(-10, 10)
+        offspring2.y = self.y + random.uniform(-10, 10)
+        
+        # Add offspring to the global fish list
+        peces.extend([offspring1, offspring2])
+
+    def approach(self, target):
+        # Move towards target fish
+        angle_to_target = angle_in_radians(self.x, self.y, target.x, target.y)
+        self.target_angle = angle_to_target
+
+        # Mate if close enough
+        if math.hypot(self.x - target.x, self.y - target.y) < 10:
+            self.mate(target)
+            self.energia -= 0.4  # Energy cost for mating
+            target.energia -= 0.4
+            self.is_mating = False
+            target.is_mating = False
+            self.mate_target = None
+            target.mate_target = None
 
     def dibuja(self, frame):
-        if self.energia > 0:
-            color_main = self.color
-        else:
-            color_main = (128, 128, 128)
-
-        # Add breathing effect with mouth
+        # Drawing logic for the fish (body, eyes, tail, etc.)
+        color_main = self.color if self.energia > 0 else (128, 128, 128)
         mouth_radius = max(int(math.sin(self.tiempo * 2) * 2 + 3), 1)
         x_mouth = int(self.x + math.cos(self.a) * 5 * self.edad)
         y_mouth = int(self.y + math.sin(self.a) * 5 * self.edad)
-        cv2.circle(frame, (x_mouth, y_mouth), mouth_radius, color_main, -1, cv2.LINE_AA)
+        if frame is not None:
+            cv2.circle(frame, (x_mouth, y_mouth), mouth_radius, color_main, -1, cv2.LINE_AA)
+        # Collect mouth data
+        self.body_parts.append({'x': x_mouth, 'y': y_mouth, 'radius': mouth_radius, 'color': color_main})
 
         for i in range(-1, self.numeroelementos):
             if i == 1:
@@ -78,7 +140,10 @@ class Pez:
                     x_eye = int(self.x + sign * math.cos(self.a + math.pi / 2) * 4 * self.edad - i * math.cos(self.a) * self.edad + math.sin(self.a) * math.sin((i / 5) - self.tiempo) * 4)
                     y_eye = int(self.y + sign * math.sin(self.a + math.pi / 2) * 4 * self.edad - i * math.sin(self.a) * self.edad + math.cos(self.a) * math.sin((i / 5) - self.tiempo) * 4)
                     radius_eye = max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1) / 3), 1)
-                    cv2.circle(frame, (x_eye, y_eye), radius_eye, (255, 255, 255), -1, cv2.LINE_AA)
+                    if frame is not None:
+                        cv2.circle(frame, (x_eye, y_eye), radius_eye, (255, 255, 255), -1, cv2.LINE_AA)
+                    # Collect eye data
+                    self.body_parts.append({'x': x_eye, 'y': y_eye, 'radius': radius_eye, 'color': (255, 255, 255)})
 
             if i == self.numeroelementos // 2 or i == int(self.numeroelementos / 1.1):
                 for sign in [-1, 1]:
@@ -86,77 +151,90 @@ class Pez:
                     y_fin = int(self.y + sign * math.sin(self.a + math.pi / 2) * 0.3 * self.edad - i * math.sin(self.a) * self.edad + math.cos(self.a) * math.sin((i / 5) - self.tiempo) * 4)
                     axes = (max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1) * 2), 1), max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1)), 1))
                     angle = math.degrees(self.a + math.pi / 2 - math.cos(self.tiempo * 2) * sign)
-                    cv2.ellipse(frame, (x_fin, y_fin), axes, angle, 0, 360, color_main, -1, cv2.LINE_AA)
+                    if frame is not None:
+                        cv2.ellipse(frame, (x_fin, y_fin), axes, angle, 0, 360, color_main, -1, cv2.LINE_AA)
+                    # Collect fin data as particles (approximated as circles)
+                    self.body_parts.append({'x': x_fin, 'y': y_fin, 'radius': axes[0], 'color': color_main})
 
         for i in range(-1, self.numeroelementos):
             x_body = int(self.x - i * math.cos(self.a) * 2 * self.edad + math.sin(self.a) * math.sin((i / 5) - self.tiempo) * 4)
             y_body = int(self.y - i * math.sin(self.a) * 2 * self.edad + math.cos(self.a) * math.sin((i / 5) - self.tiempo) * 4)
             radius_body = max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1) / 1), 1)
             color_body = (self.colorr[i], self.colorg[i], self.colorb[i])
-            cv2.circle(frame, (x_body, y_body), radius_body, color_body, -1, cv2.LINE_AA)
+            if frame is not None:
+                cv2.circle(frame, (x_body, y_body), radius_body, color_body, -1, cv2.LINE_AA)
+            # Collect body part data
+            self.body_parts.append({'x': x_body, 'y': y_body, 'radius': radius_body, 'color': color_body})
 
         for i in range(self.numeroelementos, self.numeroelementos + self.numeroelementoscola):
             x_tail = int(self.x - (i - 3) * math.cos(self.a) * 2 * self.edad + math.sin(self.a) * math.sin((i / 5) - self.tiempo) * 4)
             y_tail = int(self.y - (i - 3) * math.sin(self.a) * 2 * self.edad + math.cos(self.a) * math.sin((i / 5) - self.tiempo) * 4)
             radius_tail = max(int(-self.edad * 0.4 * (self.numeroelementos - i) * 2 + 1), 1)
-            cv2.circle(frame, (x_tail, y_tail), radius_tail, color_main, -1, cv2.LINE_AA)
+            if frame is not None:
+                cv2.circle(frame, (x_tail, y_tail), radius_tail, color_main, -1, cv2.LINE_AA)
+            # Collect tail data
+            self.body_parts.append({'x': x_tail, 'y': y_tail, 'radius': radius_tail, 'color': color_main})
+
     def vive(self, frame):
-        if random.random() < 0.002:
-            self.direcciongiro = -self.direcciongiro
-        if self.energia > 0:
-            self.tiempo += self.avancevida
-            self.mueve()
-        self.energia -= 0.00003
-        self.edad += 0.00001
-        if self.edad > 3:
-            self.energia = 0
+        # Clear previous body parts only if the fish is alive
+        if self.alive:
+            self.body_parts = []
+
+        # Check if fish is eligible for mating
+        if not self.is_mating and self.energia > 0.6 and 1.5 < self.edad < 3 and random.random() < 0.05:
+            potential_mates = [other for other in peces if other != self and other.sexo != self.sexo
+                               and other.energia > 0.6 and 1.5 < other.edad < 3]
+            if potential_mates:
+                self.mate_target = random.choice(potential_mates)
+                self.is_mating = True
+                self.mate_target.is_mating = True
+                self.mate_target.mate_target = self
+
+        # Approach target if in mating state
+        if self.is_mating and self.mate_target:
+            self.approach(self.mate_target)
+        else:
+            # Regular movement and survival mechanics
+            if random.random() < 0.002:
+                self.direcciongiro = -self.direcciongiro
+            if self.energia > 0:
+                self.tiempo += self.avancevida
+                self.mueve()
+            self.energia -= 0.00003
+            self.edad += 0.00001
+            if self.edad > 3:
+                self.energia = 0
+
+        # Handle death and particle generation
+        if self.energia <= 0 and self.alive:
+            self.alive = False
+            # Call dibuja to ensure body_parts is populated
+            self.dibuja(None)  # We pass None to avoid drawing on the frame
+            # Generate particles from body parts
+            for part in self.body_parts:
+                particle = Particle(part['x'], part['y'], part['radius'], part['color'])
+                particles.append(particle)
+
+        # Drawing the fish if alive
         if self.energia > 0:
             self.dibuja(frame)
 
     def mueve(self):
-        # Avoidance logic
-        repulsion_radius = 50
-        repulsion_force = 0.05  # How strongly the fish should avoid nearby fish
-        avg_repulsion_x, avg_repulsion_y = 0, 0
-        nearby_fish_count = 0
-
-        for other_fish in peces:
-            if other_fish != self:
-                dist = math.hypot(self.x - other_fish.x, self.y - other_fish.y)
-                if dist < repulsion_radius:
-                    # Compute repulsion vector
-                    repulsion_x = self.x - other_fish.x
-                    repulsion_y = self.y - other_fish.y
-                    avg_repulsion_x += repulsion_x / dist  # Normalize and add
-                    avg_repulsion_y += repulsion_y / dist
-                    nearby_fish_count += 1
-
-        # If there are nearby fish to avoid, adjust target angle
-        if nearby_fish_count > 0:
-            avg_repulsion_x /= nearby_fish_count
-            avg_repulsion_y /= nearby_fish_count
-            avoidance_angle = math.atan2(avg_repulsion_y, avg_repulsion_x)
-            
-            # Blend avoidance angle with the current target angle
-            self.target_angle = (self.target_angle + avoidance_angle * repulsion_force) % (2 * math.pi)
-
-        # Regular movement logic
+        # Existing movement and collision logic
         angle_diff = angle_difference(self.a, self.target_angle)
         if abs(angle_diff) > self.max_turn_rate:
-            angle_change = self.max_turn_rate if angle_diff > 0 else -self.max_turn_rate
-            self.a += angle_change
+            self.a += self.max_turn_rate if angle_diff > 0 else -self.max_turn_rate
         else:
             self.a = self.target_angle
 
-        self.a = (self.a + math.pi) % (2 * math.pi) - math.pi
         self.x += math.cos(self.a) * self.avancevida * self.edad * 5
         self.y += math.sin(self.a) * self.avancevida * self.edad * 5
         self.colisiona()
 
     def colisiona(self):
         if self.x < 0 or self.x > width or self.y < 0 or self.y > height:
-            # If out of bounds, set a target angle to turn 180 degrees slowly
             self.target_angle = (self.a + math.pi) % (2 * math.pi)
+
 
 class Comida:
     def __init__(self, x=None, y=None, radius=None, angle=None):
@@ -227,10 +305,11 @@ class Comida:
         self.visible = False
 
 
-# Initialize fishes and food
+# Initialize fishes, food, and particles
 numeropeces = 200
 peces = [Pez() for _ in range(numeropeces)]
 comidas = [Comida()]
+particles = []  # List to hold particles from dead fishes
 
 # Main loop
 for frame_count in range(total_frames):
@@ -258,7 +337,13 @@ for frame_count in range(total_frames):
     for pez in peces:
         pez.vive(frame)
 
-    peces = [pez for pez in peces if pez.energia > 0]
+    # Update and draw particles
+    for particle in particles:
+        particle.update()
+        particle.draw(frame)
+    particles = [p for p in particles if p.visible]
+
+    peces = [pez for pez in peces if pez.energia > 0 or pez.alive]  # Keep dead fish until particles are generated
     comidas = [comida for comida in comidas if comida.visible]
     video_writer.write(frame)
     cv2.imshow('Fish Simulation', frame)
