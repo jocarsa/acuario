@@ -213,7 +213,7 @@ class Comida:
     def divide(self):
         # Create two new particles with half the radius and opposite directions
         angle_offset = math.pi  # 180 degrees
-        child_radius = self.radio / 1.2
+        child_radius = self.radio / 1.4
 
         if child_radius >= 1:
             # Create two new particles in opposite directions
