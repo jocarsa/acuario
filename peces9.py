@@ -6,9 +6,9 @@ import os
 import time
 
 # Video settings
-width, height = 1080, 1080
+width, height = 1920, 1080
 fps = 30
-duration = 60  # seconds
+duration = 60*60  # seconds
 total_frames = fps * duration
 
 # Prepare video directory
