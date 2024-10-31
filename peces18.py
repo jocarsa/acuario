@@ -42,7 +42,7 @@ class Pez:
         self.a = random.uniform(0, math.pi * 2)
         self.edad = (random.uniform(2, 4)) / 2
         self.tiempo = random.uniform(0, 1)
-        self.avancevida = random.uniform(0, 0.1)
+        self.avancevida = random.uniform(0.05, 0.1)
         self.sexo = random.randint(0, 1)
         
         # Color aleatorio independiente del sexo
@@ -235,11 +235,12 @@ comidas = [Comida()]
 # Main loop
 for frame_count in range(total_frames):
     frame = np.zeros((height, width, 3), dtype=np.uint8)
-    if random.random() < 0.00002*numeropeces:
+    if random.random() < 0.00002 * numeropeces:
         comidas.append(Comida())
     for comida in comidas:
         comida.vive(frame)
 
+    # Fish behavior and food interaction
     for pez in peces:
         food_in_radius = [comida for comida in comidas if comida.visible and math.hypot(pez.x - comida.x, pez.y - comida.y) < 300]
         
@@ -255,10 +256,14 @@ for frame_count in range(total_frames):
             if random.random() < 0.05:
                 pez.target_angle += (random.random() - 0.5) * 0.05
 
-    for pez in peces:
+    # Update each fish's state and spawn new fish for any that die
+    for pez in peces[:]:  # Make a shallow copy of the list to safely modify it
         pez.vive(frame)
+        if pez.energia <= 0:
+            peces.remove(pez)
+            peces.append(Pez())  # Spawn a new fish when one dies
 
-    peces = [pez for pez in peces if pez.energia > 0]
+    # Clean up invisible food items and update the frame
     comidas = [comida for comida in comidas if comida.visible]
     video_writer.write(frame)
     cv2.imshow('Fish Simulation', frame)
