@@ -61,45 +61,80 @@ class Pez:
         self.target_angle = self.a  # Desired angle
 
     def dibuja(self, frame):
-        if self.energia > 0:
-            color_main = self.color
-        else:
-            color_main = (128, 128, 128)
+        # Set the main color based on energy level
+        color_main = self.color if self.energia > 0 else (128, 128, 128)
 
-        # Add breathing effect with mouth
+        # Mouth with breathing effect
         mouth_radius = max(int(math.sin(self.tiempo * 2) * 2 + 3), 1)
         x_mouth = int(self.x + math.cos(self.a) * 5 * self.edad)
         y_mouth = int(self.y + math.sin(self.a) * 5 * self.edad)
+        
+        # Oscillation perpendicular to direction
+        mouth_oscillation = math.sin(self.tiempo) * 2
+        x_mouth += int(math.cos(self.a + math.pi / 2) * mouth_oscillation)
+        y_mouth += int(math.sin(self.a + math.pi / 2) * mouth_oscillation)
+        
         cv2.circle(frame, (x_mouth, y_mouth), mouth_radius, color_main, -1, cv2.LINE_AA)
 
+        # Eyes
         for i in range(-1, self.numeroelementos):
             if i == 1:
                 for sign in [-1, 1]:
-                    x_eye = int(self.x + sign * math.cos(self.a + math.pi / 2) * 4 * self.edad - i * math.cos(self.a) * self.edad + math.sin(self.a) * math.sin((i / 5) - self.tiempo) * 4)
-                    y_eye = int(self.y + sign * math.sin(self.a + math.pi / 2) * 4 * self.edad - i * math.sin(self.a) * self.edad + math.cos(self.a) * math.sin((i / 5) - self.tiempo) * 4)
+                    x_eye = int(self.x + sign * math.cos(self.a + math.pi / 2) * 4 * self.edad - i * math.cos(self.a) * self.edad)
+                    y_eye = int(self.y + sign * math.sin(self.a + math.pi / 2) * 4 * self.edad - i * math.sin(self.a) * self.edad)
+
+                    # Oscillation perpendicular to direction
+                    eye_oscillation = math.sin((i / 5) - self.tiempo) * 4
+                    x_eye += int(math.cos(self.a + math.pi / 2) * eye_oscillation)
+                    y_eye += int(math.sin(self.a + math.pi / 2) * eye_oscillation)
+                    
                     radius_eye = max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1) / 3), 1)
                     cv2.circle(frame, (x_eye, y_eye), radius_eye, (255, 255, 255), -1, cv2.LINE_AA)
 
+        # Fins
+        for i in range(-1, self.numeroelementos):
             if i == self.numeroelementos // 2 or i == int(self.numeroelementos / 1.1):
                 for sign in [-1, 1]:
-                    x_fin = int(self.x + sign * math.cos(self.a + math.pi / 2) * 0.3 * self.edad - i * math.cos(self.a) * self.edad + math.sin(self.a) * math.sin((i / 5) - self.tiempo) * 4)
-                    y_fin = int(self.y + sign * math.sin(self.a + math.pi / 2) * 0.3 * self.edad - i * math.sin(self.a) * self.edad + math.cos(self.a) * math.sin((i / 5) - self.tiempo) * 4)
-                    axes = (max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1) * 2), 1), max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1)), 1))
+                    x_fin = int(self.x + sign * math.cos(self.a + math.pi / 2) * 0.3 * self.edad - i * math.cos(self.a) * self.edad)
+                    y_fin = int(self.y + sign * math.sin(self.a + math.pi / 2) * 0.3 * self.edad - i * math.sin(self.a) * self.edad)
+
+                    # Oscillation perpendicular to direction
+                    fin_oscillation = math.sin((i / 5) - self.tiempo) * 4
+                    x_fin += int(math.cos(self.a + math.pi / 2) * fin_oscillation)
+                    y_fin += int(math.sin(self.a + math.pi / 2) * fin_oscillation)
+                    
+                    axes = (max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1) * 2), 1),
+                            max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1)), 1))
                     angle = math.degrees(self.a + math.pi / 2 - math.cos(self.tiempo * 2) * sign)
                     cv2.ellipse(frame, (x_fin, y_fin), axes, angle, 0, 360, color_main, -1, cv2.LINE_AA)
 
+        # Body
         for i in range(-1, self.numeroelementos):
-            x_body = int(self.x - i * math.cos(self.a) * 2 * self.edad + math.sin(self.a) * math.sin((i / 5) - self.tiempo) * 4)
-            y_body = int(self.y - i * math.sin(self.a) * 2 * self.edad + math.cos(self.a) * math.sin((i / 5) - self.tiempo) * 4)
+            x_body = int(self.x - i * math.cos(self.a) * 2 * self.edad)
+            y_body = int(self.y - i * math.sin(self.a) * 2 * self.edad)
+            
+            # Oscillation perpendicular to direction
+            body_oscillation = math.sin((i / 5) - self.tiempo) * 4
+            x_body += int(math.cos(self.a + math.pi / 2) * body_oscillation)
+            y_body += int(math.sin(self.a + math.pi / 2) * body_oscillation)
+            
             radius_body = max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1) / 1), 1)
             color_body = (self.colorr[i], self.colorg[i], self.colorb[i])
             cv2.circle(frame, (x_body, y_body), radius_body, color_body, -1, cv2.LINE_AA)
 
+        # Tail
         for i in range(self.numeroelementos, self.numeroelementos + self.numeroelementoscola):
-            x_tail = int(self.x - (i - 3) * math.cos(self.a) * 2 * self.edad + math.sin(self.a) * math.sin((i / 5) - self.tiempo) * 4)
-            y_tail = int(self.y - (i - 3) * math.sin(self.a) * 2 * self.edad + math.cos(self.a) * math.sin((i / 5) - self.tiempo) * 4)
+            x_tail = int(self.x - (i - 3) * math.cos(self.a) * 2 * self.edad)
+            y_tail = int(self.y - (i - 3) * math.sin(self.a) * 2 * self.edad)
+            
+            # Oscillation perpendicular to direction
+            tail_oscillation = math.sin((i / 5) - self.tiempo) * 4
+            x_tail += int(math.cos(self.a + math.pi / 2) * tail_oscillation)
+            y_tail += int(math.sin(self.a + math.pi / 2) * tail_oscillation)
+            
             radius_tail = max(int(-self.edad * 0.4 * (self.numeroelementos - i) * 2 + 1), 1)
             cv2.circle(frame, (x_tail, y_tail), radius_tail, color_main, -1, cv2.LINE_AA)
+
     def vive(self, frame):
         if random.random() < 0.002:
             self.direcciongiro = -self.direcciongiro
