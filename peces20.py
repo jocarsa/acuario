@@ -6,8 +6,8 @@ import os
 import time
 
 # Video settings
-width, height = 1920, 1080
-fps = 30
+width, height = 3840, 2160
+fps = 60
 duration = 60*60*12  # seconds
 total_frames = fps * duration
 

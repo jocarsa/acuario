@@ -6,9 +6,9 @@ import os
 import time
 
 # Video settings
-width, height = 1920, 1080
-fps = 30
-duration = 60 * 60 * 12  # seconds
+width, height = 3840, 2160
+fps = 60
+duration = 60*60*12  # seconds
 total_frames = fps * duration
 
 # Prepare video directory
@@ -44,10 +44,10 @@ class Pez:
         self.tiempo = random.uniform(0, 1)
         self.avancevida = random.uniform(0.05, 0.1)
         self.sexo = random.randint(0, 1)
-
+        
         # Color aleatorio independiente del sexo
         self.color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
-
+        
         self.energia = random.uniform(0, 1)
         self.direcciongiro = random.choice([-1, 0, 1])
         self.numeroelementos = 10
@@ -59,13 +59,6 @@ class Pez:
         self.giro = 0
         self.max_turn_rate = random.uniform(0.005, 0.01)  # Reduced turn rate for slower, arcing movement
         self.target_angle = self.a  # Desired angle
-
-        # New attributes for speed management
-        self.initial_speed = self.avancevida
-        self.max_speed = self.initial_speed * 5
-        self.speed = self.initial_speed
-        self.is_chasing_food = False
-        self.is_avoiding_collision = False
 
     def dibuja(self, frame):
         # Set the main color based on energy level
@@ -156,11 +149,8 @@ class Pez:
             self.dibuja(frame)
 
     def mueve(self):
-        self.is_avoiding_collision = False  # Reset collision avoidance flag
-
         # Avoidance logic
         repulsion_radius = 50
-        collision_radius = 10  # Radius below which the fish must turn sharply to avoid overlapping
         repulsion_force = 0.05  # How strongly the fish should avoid nearby fish
         avg_repulsion_x, avg_repulsion_y = 0, 0
         nearby_fish_count = 0
@@ -176,29 +166,14 @@ class Pez:
                     avg_repulsion_y += repulsion_y / dist
                     nearby_fish_count += 1
 
-                    if dist < collision_radius:
-                        # Immediate collision avoidance
-                        self.is_avoiding_collision = True
-                        # Adjust target angle sharply away from other fish
-                        avoidance_angle = math.atan2(repulsion_y, repulsion_x)
-                        self.target_angle = avoidance_angle
-                        break  # Exit the loop to handle immediate collision
-
-        # If there are nearby fish to avoid and not in immediate collision
-        if nearby_fish_count > 0 and not self.is_avoiding_collision:
+        # If there are nearby fish to avoid, adjust target angle
+        if nearby_fish_count > 0:
             avg_repulsion_x /= nearby_fish_count
             avg_repulsion_y /= nearby_fish_count
             avoidance_angle = math.atan2(avg_repulsion_y, avg_repulsion_x)
             
             # Blend avoidance angle with the current target angle
             self.target_angle = (self.target_angle + avoidance_angle * repulsion_force) % (2 * math.pi)
-            self.is_avoiding_collision = True
-
-        # Adjust speed based on behavior
-        if self.is_chasing_food or self.is_avoiding_collision:
-            self.speed = self.max_speed
-        else:
-            self.speed = self.initial_speed
 
         # Regular movement logic
         angle_diff = angle_difference(self.a, self.target_angle)
@@ -209,15 +184,14 @@ class Pez:
             self.a = self.target_angle
 
         self.a = (self.a + math.pi) % (2 * math.pi) - math.pi
-        self.x += math.cos(self.a) * self.speed * self.edad * 5
-        self.y += math.sin(self.a) * self.speed * self.edad * 5
+        self.x += math.cos(self.a) * self.avancevida * self.edad * 5
+        self.y += math.sin(self.a) * self.avancevida * self.edad * 5
         self.colisiona()
 
     def colisiona(self):
         if self.x < 0 or self.x > width or self.y < 0 or self.y > height:
             # If out of bounds, set a target angle to turn 180 degrees slowly
             self.target_angle = (self.a + math.pi) % (2 * math.pi)
-            self.is_avoiding_collision = True  # Increase speed to avoid boundary
 
 class Comida:
     def __init__(self, x=None, y=None, radius=None, angle=None):
@@ -289,7 +263,7 @@ class Comida:
 
 
 # Initialize fishes and food
-numeropeces = random.randint(5, 10)
+numeropeces = random.randint(20,200)
 peces = [Pez() for _ in range(numeropeces)]
 comidas = [Comida()]
 
@@ -303,17 +277,13 @@ for frame_count in range(total_frames):
 
     # Fish behavior and food interaction
     for pez in peces:
-        # Reset chasing food flag
-        pez.is_chasing_food = False
-
         food_in_radius = [comida for comida in comidas if comida.visible and math.hypot(pez.x - comida.x, pez.y - comida.y) < 300]
         
         if food_in_radius:
             closest_food = min(food_in_radius, key=lambda comida: math.hypot(pez.x - comida.x, pez.y - comida.y))
             angleRadians = angle_in_radians(pez.x, pez.y, closest_food.x, closest_food.y)
             pez.target_angle = angleRadians
-            pez.is_chasing_food = True  # Fish is chasing food
-
+            
             if math.hypot(pez.x - closest_food.x, pez.y - closest_food.y) < 10:
                 closest_food.visible = False
                 pez.energia += closest_food.radio / 10
