@@ -40,7 +40,7 @@ class Pez:
         self.x = random.uniform(0, width)
         self.y = random.uniform(0, height)
         self.a = random.uniform(0, math.pi * 2)
-        self.edad = (random.uniform(2, 4)) / 2
+        self.edad = random.uniform(1, 2)
         self.tiempo = random.uniform(0, 1)
         self.avancevida = random.uniform(0.05, 0.1)
         self.sexo = random.randint(0, 1)
@@ -60,15 +60,18 @@ class Pez:
         self.max_turn_rate = random.uniform(0.005, 0.02)  # Increased turn rate for sharper turns
         self.target_angle = self.a  # Desired angle
 
-        # New attributes for speed management
-        self.initial_speed = self.avancevida
-        self.max_speed = self.initial_speed * 2
-        self.speed = self.initial_speed
+        # Adjusted parameters for average speed similar to original code
+        self.flapping_frequency = random.uniform(0.5, 1.0)
+        self.max_thrust = random.uniform(0.01, 0.03)
+        self.drag_coefficient = random.uniform(0.02, 0.04)
+        self.flapping_phase = 0.0
+        self.base_flapping_frequency = self.flapping_frequency
+        self.base_max_thrust = self.max_thrust
+        self.speed = random.uniform(0.5, 1.0)  # Start with a base speed similar to original code
         self.is_chasing_food = False
         self.is_avoiding_collision = False
-        self.acceleration = self.max_speed / 30  # Faster acceleration/deceleration
 
-        # New attributes for stuck detection
+        # Attributes for stuck detection
         self.previous_positions = []
         self.stuck_threshold = 5  # Number of frames to consider for stuck detection
         self.stuck_counter = 0
@@ -78,13 +81,13 @@ class Pez:
         # Set the main color based on energy level
         color_main = self.color if self.energia > 0 else (128, 128, 128)
 
-        # Mouth with breathing effect
-        mouth_radius = max(int(math.sin(self.tiempo * 2) * 2 + 3), 1)
+        # Mouth with breathing effect tied to flapping_phase
+        mouth_radius = max(int(math.sin(2 * math.pi * self.flapping_phase * 2) * 2 + 3), 1)
         x_mouth = int(self.x + math.cos(self.a) * 5 * self.edad)
         y_mouth = int(self.y + math.sin(self.a) * 5 * self.edad)
         
         # Oscillation perpendicular to direction
-        mouth_oscillation = math.sin(self.tiempo) * 2
+        mouth_oscillation = math.sin(2 * math.pi * self.flapping_phase) * 2
         x_mouth += int(math.cos(self.a + math.pi / 2) * mouth_oscillation)
         y_mouth += int(math.sin(self.a + math.pi / 2) * mouth_oscillation)
         
@@ -98,7 +101,7 @@ class Pez:
                     y_eye = int(self.y + sign * math.sin(self.a + math.pi / 2) * 4 * self.edad - i * math.sin(self.a) * self.edad)
 
                     # Oscillation perpendicular to direction
-                    eye_oscillation = math.sin((i / 5) - self.tiempo) * 4
+                    eye_oscillation = math.sin((i / 5) - 2 * math.pi * self.flapping_phase) * 4
                     x_eye += int(math.cos(self.a + math.pi / 2) * eye_oscillation)
                     y_eye += int(math.sin(self.a + math.pi / 2) * eye_oscillation)
                     
@@ -113,13 +116,13 @@ class Pez:
                     y_fin = int(self.y + sign * math.sin(self.a + math.pi / 2) * 0.3 * self.edad - i * math.sin(self.a) * self.edad)
 
                     # Oscillation perpendicular to direction
-                    fin_oscillation = math.sin((i / 5) - self.tiempo) * 4
+                    fin_oscillation = math.sin((i / 5) - 2 * math.pi * self.flapping_phase) * 4
                     x_fin += int(math.cos(self.a + math.pi / 2) * fin_oscillation)
                     y_fin += int(math.sin(self.a + math.pi / 2) * fin_oscillation)
                     
                     axes = (max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1) * 2), 1),
                             max(int((self.edad * 0.4 * (self.numeroelementos - i) + 1)), 1))
-                    angle = math.degrees(self.a + math.pi / 2 - math.cos(self.tiempo * 2) * sign)
+                    angle = math.degrees(self.a + math.pi / 2 - math.cos(2 * math.pi * self.flapping_phase * 2) * sign)
                     cv2.ellipse(frame, (x_fin, y_fin), axes, angle, 0, 360, color_main, -1, cv2.LINE_AA)
 
         # Body
@@ -128,7 +131,7 @@ class Pez:
             y_body = int(self.y - i * math.sin(self.a) * 2 * self.edad)
             
             # Oscillation perpendicular to direction
-            body_oscillation = math.sin((i / 5) - self.tiempo) * 4
+            body_oscillation = math.sin((i / 5) - 2 * math.pi * self.flapping_phase) * 4
             x_body += int(math.cos(self.a + math.pi / 2) * body_oscillation)
             y_body += int(math.sin(self.a + math.pi / 2) * body_oscillation)
             
@@ -142,7 +145,7 @@ class Pez:
             y_tail = int(self.y - (i - 3) * math.sin(self.a) * 2 * self.edad)
             
             # Oscillation perpendicular to direction
-            tail_oscillation = math.sin((i / 5) - self.tiempo) * 4
+            tail_oscillation = math.sin((i / 5) - 2 * math.pi * self.flapping_phase) * 4
             x_tail += int(math.cos(self.a + math.pi / 2) * tail_oscillation)
             y_tail += int(math.sin(self.a + math.pi / 2) * tail_oscillation)
             
@@ -165,10 +168,9 @@ class Pez:
     def mueve(self):
         self.is_avoiding_collision = False  # Reset collision avoidance flag
 
-        # Avoidance logic
+        # Avoidance logic (same as before)
         safe_distance = 20  # Minimum safe distance to avoid collision
         repulsion_radius = 50
-        repulsion_force = 0.1  # Increased to make fish avoid collisions more aggressively
         avg_repulsion_x, avg_repulsion_y = 0, 0
         nearby_fish_count = 0
 
@@ -199,17 +201,7 @@ class Pez:
             self.target_angle = (avoidance_angle) % (2 * math.pi)
             self.is_avoiding_collision = True
 
-            # Adjust speed to avoid collision
-            if min_distance < safe_distance:
-                # Decelerate to a stop if necessary
-                target_speed = 0
-            else:
-                # Accelerate to move away faster
-                target_speed = self.max_speed
-        else:
-            target_speed = self.initial_speed
-
-        # Stuck detection logic
+        # Stuck detection logic (same as before)
         # Record the position
         self.previous_positions.append((self.x, self.y))
         if len(self.previous_positions) > self.stuck_threshold:
@@ -229,7 +221,6 @@ class Pez:
 
         if self.is_stuck:
             # Fish is stuck in melee, make it run away
-            # Recompute nearby fishes and their count
             nearby_fishes = [fish for fish in peces if fish != self and math.hypot(self.x - fish.x, self.y - fish.y) < repulsion_radius]
             nearby_fish_count = len(nearby_fishes)
 
@@ -239,24 +230,35 @@ class Pez:
                 center_y = sum(fish.y for fish in nearby_fishes) / nearby_fish_count
                 # Set target angle away from the center
                 self.target_angle = math.atan2(self.y - center_y, self.x - center_x)
-                # Accelerate to max speed
-                target_speed = self.max_speed
                 self.is_avoiding_collision = True  # Ensure collision avoidance behavior
             else:
                 # No nearby fish, cannot be stuck
                 self.is_stuck = False
 
-        # Adjust speed based on behavior with acceleration/deceleration
-        if self.speed < target_speed:
-            # Accelerate
-            self.speed += self.acceleration
-            if self.speed > target_speed:
-                self.speed = target_speed
-        elif self.speed > target_speed:
-            # Decelerate
-            self.speed -= self.acceleration
-            if self.speed < target_speed:
-                self.speed = target_speed
+        # Adjust flapping frequency and max_thrust based on behavior
+        if self.is_chasing_food or self.is_avoiding_collision or self.is_stuck:
+            self.flapping_frequency = self.base_flapping_frequency * 1.5  # Increase frequency
+            self.max_thrust = self.base_max_thrust * 1.5  # Increase thrust
+        else:
+            self.flapping_frequency = self.base_flapping_frequency
+            self.max_thrust = self.base_max_thrust
+
+        # Update flapping phase
+        self.flapping_phase += self.flapping_frequency * self.avancevida
+
+        # Compute thrust (only positive values)
+        thrust = self.max_thrust * max(math.sin(2 * math.pi * self.flapping_phase), 0)
+
+        # Compute drag
+        drag = self.drag_coefficient * self.speed
+
+        # Update speed
+        self.speed += thrust - drag
+        self.speed = max(self.speed, 0)
+
+        # Cap the speed to prevent excessive speeds
+        max_speed = 2.0  # Adjust as needed to match original average speed
+        self.speed = min(self.speed, max_speed)
 
         # Regular movement logic
         angle_diff = angle_difference(self.a, self.target_angle)
@@ -267,6 +269,8 @@ class Pez:
             self.a = self.target_angle
 
         self.a = (self.a + math.pi) % (2 * math.pi) - math.pi
+
+        # Use original movement multiplier
         self.x += math.cos(self.a) * self.speed * self.edad * 5
         self.y += math.sin(self.a) * self.speed * self.edad * 5
         self.colisiona()
@@ -344,7 +348,6 @@ class Comida:
 
         # Mark this particle as invisible to "remove" it
         self.visible = False
-
 
 # Initialize fishes and food
 numeropeces = random.randint(20, 200)
