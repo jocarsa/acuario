@@ -6,9 +6,9 @@ import os
 import time
 
 # Video settings
-width, height = 3840, 2160
-fps = 60
-duration = 60 * 60 * 12  # seconds
+width, height = 3840, 2160  # Reduced size for testing; adjust as needed
+fps = 30
+duration = 60*60  # seconds
 total_frames = fps * duration
 
 # Prepare video directory
@@ -35,6 +35,77 @@ def angle_difference(beta, alpha):
 def angle_in_radians(x1, y1, x2, y2):
     return math.atan2(y2 - y1, x2 - x1)
 
+class Rectangle:
+    def __init__(self, x, y, w, h):
+        self.x = x  # Center x-coordinate
+        self.y = y  # Center y-coordinate
+        self.w = w  # Half of the width
+        self.h = h  # Half of the height
+
+    def contains(self, entity):
+        return (self.x - self.w <= entity.x <= self.x + self.w and
+                self.y - self.h <= entity.y <= self.y + self.h)
+
+    def intersects(self, range):
+        return not (range.x - range.w > self.x + self.w or
+                    range.x + range.w < self.x - self.w or
+                    range.y - range.h > self.y + self.h or
+                    range.y + range.h < self.y - self.h)
+
+class Quadtree:
+    def __init__(self, boundary, capacity):
+        self.boundary = boundary  # The region this quadtree node represents
+        self.capacity = capacity  # Maximum number of entities before subdivision
+        self.entities = []
+        self.divided = False  # Indicates if the node has been subdivided
+
+    def subdivide(self):
+        x = self.boundary.x
+        y = self.boundary.y
+        w = self.boundary.w / 2
+        h = self.boundary.h / 2
+
+        ne = Rectangle(x + w, y - h, w, h)
+        self.northeast = Quadtree(ne, self.capacity)
+        nw = Rectangle(x - w, y - h, w, h)
+        self.northwest = Quadtree(nw, self.capacity)
+        se = Rectangle(x + w, y + h, w, h)
+        self.southeast = Quadtree(se, self.capacity)
+        sw = Rectangle(x - w, y + h, w, h)
+        self.southwest = Quadtree(sw, self.capacity)
+        self.divided = True
+
+    def insert(self, entity):
+        if not self.boundary.contains(entity):
+            return False  # The entity does not belong in this node
+
+        if len(self.entities) < self.capacity:
+            self.entities.append(entity)
+            return True
+        else:
+            if not self.divided:
+                self.subdivide()
+
+            if self.northeast.insert(entity): return True
+            if self.northwest.insert(entity): return True
+            if self.southeast.insert(entity): return True
+            if self.southwest.insert(entity): return True
+
+        return False
+
+    def query(self, range, found):
+        if not self.boundary.intersects(range):
+            return  # No need to check this node
+        else:
+            for entity in self.entities:
+                if range.contains(entity):
+                    found.append(entity)
+            if self.divided:
+                self.northwest.query(range, found)
+                self.northeast.query(range, found)
+                self.southwest.query(range, found)
+                self.southeast.query(range, found)
+
 class Pez:
     def __init__(self):
         self.x = random.uniform(0, width)
@@ -52,9 +123,9 @@ class Pez:
         self.direcciongiro = random.choice([-1, 0, 1])
         self.numeroelementos = 10
         self.numeroelementoscola = 5
-        self.colorr = [self.color[0] + random.randint(-50, 50) for _ in range(-1, self.numeroelementos)]
-        self.colorg = [self.color[1] + random.randint(-50, 50) for _ in range(-1, self.numeroelementos)]
-        self.colorb = [self.color[2] + random.randint(-50, 50) for _ in range(-1, self.numeroelementos)]
+        self.colorr = [max(min(self.color[0] + random.randint(-50, 50), 255), 0) for _ in range(-1, self.numeroelementos)]
+        self.colorg = [max(min(self.color[1] + random.randint(-50, 50), 255), 0) for _ in range(-1, self.numeroelementos)]
+        self.colorb = [max(min(self.color[2] + random.randint(-50, 50), 255), 0) for _ in range(-1, self.numeroelementos)]
         self.anguloanterior = 0
         self.giro = 0
         self.max_turn_rate = random.uniform(0.005, 0.02)  # Increased turn rate for sharper turns
@@ -152,12 +223,12 @@ class Pez:
             radius_tail = max(int(-self.edad * 0.4 * (self.numeroelementos - i) * 2 + 1), 1)
             cv2.circle(frame, (x_tail, y_tail), radius_tail, color_main, -1, cv2.LINE_AA)
 
-    def vive(self, frame):
+    def vive(self, frame, quadtree):
         if random.random() < 0.002:
             self.direcciongiro = -self.direcciongiro
         if self.energia > 0:
             self.tiempo += self.avancevida
-            self.mueve()
+            self.mueve(quadtree)
         self.energia -= 0.00003
         self.edad += 0.00001
         if self.edad > 3:
@@ -165,31 +236,39 @@ class Pez:
         if self.energia > 0:
             self.dibuja(frame)
 
-    def mueve(self):
+    def mueve(self, quadtree):
         self.is_avoiding_collision = False  # Reset collision avoidance flag
 
-        # Avoidance logic (same as before)
-        safe_distance = 20  # Minimum safe distance to avoid collision
-        repulsion_radius = 50
+        # Avoidance logic using quadtree
+        perception_radius = 50  # Adjust based on desired interaction range
+        perception_range = Rectangle(self.x, self.y, perception_radius, perception_radius)
+
+        # Query the quadtree for nearby fishes
+        nearby_fishes = []
+        quadtree.query(perception_range, nearby_fishes)
+
+        # Remove self from the list if present
+        nearby_fishes = [fish for fish in nearby_fishes if fish != self]
+
+        # Collision avoidance variables
         avg_repulsion_x, avg_repulsion_y = 0, 0
         nearby_fish_count = 0
 
         min_distance = float('inf')
         closest_fish = None
 
-        for other_fish in peces:
-            if other_fish != self:
-                dist = math.hypot(self.x - other_fish.x, self.y - other_fish.y)
-                if dist < min_distance:
-                    min_distance = dist
-                    closest_fish = other_fish
-                if dist < repulsion_radius:
-                    # Compute repulsion vector
-                    repulsion_x = self.x - other_fish.x
-                    repulsion_y = self.y - other_fish.y
-                    avg_repulsion_x += repulsion_x / dist  # Normalize and add
-                    avg_repulsion_y += repulsion_y / dist
-                    nearby_fish_count += 1
+        for other_fish in nearby_fishes:
+            dist = math.hypot(self.x - other_fish.x, self.y - other_fish.y)
+            if dist < min_distance:
+                min_distance = dist
+                closest_fish = other_fish
+            if dist < perception_radius:
+                # Compute repulsion vector
+                repulsion_x = self.x - other_fish.x
+                repulsion_y = self.y - other_fish.y
+                avg_repulsion_x += repulsion_x / dist  # Normalize and add
+                avg_repulsion_y += repulsion_y / dist
+                nearby_fish_count += 1
 
         # If there are nearby fish to avoid
         if nearby_fish_count > 0:
@@ -201,7 +280,7 @@ class Pez:
             self.target_angle = (avoidance_angle) % (2 * math.pi)
             self.is_avoiding_collision = True
 
-        # Stuck detection logic (same as before)
+        # Stuck detection logic
         # Record the position
         self.previous_positions.append((self.x, self.y))
         if len(self.previous_positions) > self.stuck_threshold:
@@ -221,7 +300,10 @@ class Pez:
 
         if self.is_stuck:
             # Fish is stuck in melee, make it run away
-            nearby_fishes = [fish for fish in peces if fish != self and math.hypot(self.x - fish.x, self.y - fish.y) < repulsion_radius]
+            # Use perception_range to find nearby fishes
+            nearby_fishes = []
+            quadtree.query(perception_range, nearby_fishes)
+            nearby_fishes = [fish for fish in nearby_fishes if fish != self]
             nearby_fish_count = len(nearby_fishes)
 
             if nearby_fish_count > 0:
@@ -230,7 +312,7 @@ class Pez:
                 center_y = sum(fish.y for fish in nearby_fishes) / nearby_fish_count
                 # Set target angle away from the center
                 self.target_angle = math.atan2(self.y - center_y, self.x - center_x)
-                self.is_avoiding_collision = True  # Ensure collision avoidance behavior
+                self.is_avoiding_collision = True  # Increase speed to avoid collision
             else:
                 # No nearby fish, cannot be stuck
                 self.is_stuck = False
@@ -350,9 +432,9 @@ class Comida:
         self.visible = False
 
 # Initialize fishes and food
-numeropeces = random.randint(200, 2000)
+numeropeces = random.randint(200, 2000)  # Adjusted for testing; increase as needed
 peces = [Pez() for _ in range(numeropeces)]
-comidas = [Comida()]
+comidas = [Comida() for _ in range(10)]  # Start with some food particles
 
 # Main loop
 for frame_count in range(total_frames):
@@ -362,14 +444,33 @@ for frame_count in range(total_frames):
     for comida in comidas:
         comida.vive(frame)
 
+    # Initialize quadtree for fishes
+    boundary = Rectangle(width / 2, height / 2, width / 2, height / 2)
+    quadtree = Quadtree(boundary, capacity=4)
+    for fish in peces:
+        quadtree.insert(fish)
+
+    # Initialize quadtree for food
+    food_quadtree = Quadtree(boundary, capacity=4)
+    for comida in comidas:
+        food_quadtree.insert(comida)
+
     # Fish behavior and food interaction
     for pez in peces:
         # Reset chasing food flag
         pez.is_chasing_food = False
 
         # Fish perception radius for food
-        food_in_radius = [comida for comida in comidas if comida.visible and math.hypot(pez.x - comida.x, pez.y - comida.y) < 300]
-        
+        food_perception_radius = 300
+        perception_range = Rectangle(pez.x, pez.y, food_perception_radius, food_perception_radius)
+
+        # Query the food quadtree
+        food_in_radius = []
+        food_quadtree.query(perception_range, food_in_radius)
+
+        # Filter visible food
+        food_in_radius = [comida for comida in food_in_radius if comida.visible]
+
         if food_in_radius:
             closest_food = min(food_in_radius, key=lambda comida: math.hypot(pez.x - comida.x, pez.y - comida.y))
             angleRadians = angle_in_radians(pez.x, pez.y, closest_food.x, closest_food.y)
@@ -388,7 +489,7 @@ for frame_count in range(total_frames):
 
     # Update each fish's state and spawn new fish for any that die
     for pez in peces[:]:  # Make a shallow copy of the list to safely modify it
-        pez.vive(frame)
+        pez.vive(frame, quadtree)
         if pez.energia <= 0:
             peces.remove(pez)
             peces.append(Pez())  # Spawn a new fish when one dies
