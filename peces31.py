@@ -6,7 +6,7 @@ import os
 import time
 
 # Video settings
-width, height = 3840, 2160  # Reduced size for testing; adjust as needed
+width, height = 1920, 1080  # Reduced size for testing; adjust as needed
 fps = 30
 duration = 60*60  # seconds
 total_frames = fps * duration
@@ -432,7 +432,7 @@ class Comida:
         self.visible = False
 
 # Initialize fishes and food
-numeropeces = random.randint(200, 2000)  # Adjusted for testing; increase as needed
+numeropeces = random.randint(20, 200)  # Adjusted for testing; increase as needed
 peces = [Pez() for _ in range(numeropeces)]
 comidas = [Comida() for _ in range(10)]  # Start with some food particles
 
