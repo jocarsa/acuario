@@ -9,17 +9,34 @@ from collections import deque
 # =========================
 # Speed knobs (tune these)
 # =========================
-OUTPUT_W, OUTPUT_H = 1080, 1080   # <- 720p is MUCH faster than 1080p. Use (1080,1080) if you must.
+OUTPUT_W, OUTPUT_H = 1080, 1080   # 720p is MUCH faster; keep 1080x1080 if you must
 FPS = 30
 DURATION = 60*1
-BLUR_EVERY_N = 1                 # 1 = every frame; 2 = reuse previous blur 1 frame; try 2–3 if you need more speed
+BLUR_EVERY_N = 1                 # 1=every frame; 2–3 caches blur N-1 frames
 BACK_SCALE = 0.5                 # render+blur back layer at 50% size
 MID_SCALE  = 0.75                # render+blur mid layer at 75% size
 BACK_KSIZE = 31                  # blur kernel (odd)
 MID_KSIZE  = 11
 
 # =========================
-# Sim params (don’t change often)
+# Collision / Physics knobs
+# =========================
+COLLISION_ITERATIONS = 1         # more -> stronger separation (cost ↑)
+COLLISION_DAMPING = 0.8          # velocity damping after collision (0..1)
+COLLISION_ESCAPE_FRAMES = int(FPS * 0.5)
+COLLISION_BAUMGARTE = 0.15       # bias to eliminate resting penetration
+SLIDE_KEEP = 1.0                 # keep 100% tangential velocity
+NORMAL_REMOVE = 1.1              # remove >100% normal to avoid sticking
+TANGENT_NUDGE = 0.25             # small forward nudge to keep flow
+CAP_EXTRA_RADIUS = 1.5           # “skin” to preserve a visible gap
+
+# --- Angular dynamics (smooth visible rotation) ---
+MAX_ANGULAR_SPEED = 2.0 * math.pi / 1.2   # rad/s (≈300°/s). Lower = slower turns
+MAX_ANGULAR_ACCEL = 2.5 * math.pi         # rad/s^2 cap on angular acceleration
+COLLISION_ANG_IMPULSE = 1.2 * math.pi     # rad/s “bump” to start turning on collision
+
+# =========================
+# Sim params
 # =========================
 width, height = OUTPUT_W, OUTPUT_H
 fps = FPS
@@ -35,7 +52,7 @@ fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 video_writer = cv2.VideoWriter(video_path, fourcc, fps, (width, height))
 
 cv2.setUseOptimized(True)
-# cv2.setNumThreads(0)  # uncomment if you suspect thread oversubscription; otherwise let OpenCV decide
+# cv2.setNumThreads(0)  # uncomment if you suspect thread oversubscription
 
 # =========================
 # Helpers
@@ -61,40 +78,24 @@ def make_vertical_gradient(h, w, top_color, bottom_color):
     return grad.astype(np.uint8)
 
 def premult_blur_scaled(img, mask, ksize, scale):
-    """
-    Premultiply RGB by alpha, downscale, blur both, then upsample.
-    Returns (src_pm_f32_upsampled, alpha_f32_upsampled)
-    """
-    # premultiply at full res
-    a = (mask.astype(np.float32) / 255.0)                # HxW [0..1]
-    img_pm = img.astype(np.float32) * a[..., None]       # HxWx3
-
+    a = (mask.astype(np.float32) / 255.0)
+    img_pm = img.astype(np.float32) * a[..., None]
     if scale != 1.0:
         new_w = max(1, int(img.shape[1] * scale))
         new_h = max(1, int(img.shape[0] * scale))
         img_pm = cv2.resize(img_pm, (new_w, new_h), interpolation=cv2.INTER_AREA)
         a      = cv2.resize(a,      (new_w, new_h), interpolation=cv2.INTER_AREA)
-
-    # blur at reduced res
     img_pm_blur = cv2.GaussianBlur(img_pm, (ksize, ksize), 0)
     a_blur      = cv2.GaussianBlur(a,      (ksize, ksize), 0)
     a_blur = np.clip(a_blur, 0.0, 1.0)
-
-    # upsample back to full res (linear is enough)
     if scale != 1.0:
         img_pm_blur = cv2.resize(img_pm_blur, (width, height), interpolation=cv2.INTER_LINEAR)
         a_blur      = cv2.resize(a_blur,      (width, height), interpolation=cv2.INTER_LINEAR)
-
     return img_pm_blur, a_blur
 
 def alpha_over_pm(dst_bgr_u8, src_pm_f32, alpha_f32):
-    """
-    out = src_pm + dst*(1-a)
-    Uses cv2.multiply/add (usually faster than numpy broadcasting).
-    """
     dst_f = dst_bgr_u8.astype(np.float32)
     inv_a = 1.0 - alpha_f32
-    # Expand single-channel alpha to 3 channels for multiply
     inv_a3 = cv2.merge([inv_a, inv_a, inv_a])
     dst_scaled = cv2.multiply(dst_f, inv_a3)
     out = cv2.add(src_pm_f32, dst_scaled)
@@ -113,11 +114,9 @@ BG_GRADIENT = make_vertical_gradient(
 class Rectangle:
     def __init__(self, x, y, w, h):
         self.x, self.y, self.w, self.h = x, y, w, h
-
     def contains(self, entity):
         return (self.x - self.w <= entity.x <= self.x + self.w and
                 self.y - self.h <= entity.y <= self.y + self.h)
-
     def intersects(self, r):
         return not (r.x - r.w > self.x + self.w or
                     r.x + r.w < self.x - self.w or
@@ -130,7 +129,6 @@ class Quadtree:
         self.capacity = capacity
         self.entities = []
         self.divided = False
-
     def subdivide(self):
         x, y = self.boundary.x, self.boundary.y
         w, h = self.boundary.w/2, self.boundary.h/2
@@ -139,7 +137,6 @@ class Quadtree:
         self.southeast = Quadtree(Rectangle(x + w, y + h, w, h), self.capacity)
         self.southwest = Quadtree(Rectangle(x - w, y + h, w, h), self.capacity)
         self.divided = True
-
     def insert(self, e):
         if not self.boundary.contains(e): return False
         if len(self.entities) < self.capacity:
@@ -147,7 +144,6 @@ class Quadtree:
         if not self.divided: self.subdivide()
         return (self.northeast.insert(e) or self.northwest.insert(e) or
                 self.southeast.insert(e) or self.southwest.insert(e))
-
     def query(self, r, found):
         if not self.boundary.intersects(r): return
         for e in self.entities:
@@ -171,30 +167,23 @@ class Comida:
         self.v = v if v is not None else random.uniform(0, 0.25) * scale_by_layer
         self.visible = True
         self.vida = 0
-
     def dibuja(self, img, mask):
         if not self.visible: return
-        c = (int(self.x), int(self.y))
-        r = max(int(self.radio), 1)
+        c = (int(self.x), int(self.y)); r = max(int(self.radio), 1)
         cv2.circle(img,  c, r, (255,255,255), -1, cv2.LINE_AA)
         cv2.circle(mask, c, r, 255, -1, cv2.LINE_AA)
-
     def vive(self, img, mask):
-        if random.random() < 0.1:
-            self.a += (random.random() - 0.5) * 0.2
+        if random.random() < 0.1: self.a += (random.random() - 0.5) * 0.2
         self.x += math.cos(self.a) * self.v
         self.y += math.sin(self.a) * self.v
-
         if self.x < 0: self.x = 0; self.a = -self.a
         elif self.x > width: self.x = width; self.a = -self.a
         if self.y < 0: self.y = 0; self.a = math.pi - self.a
         elif self.y > height: self.y = height; self.a = math.pi - self.a
-
         self.vida += 1
         if self.vida % fps == 0 and self.radio >= 2: self.divide()
         if self.radio < 1: self.visible = False
         self.dibuja(img, mask)
-
     def divide(self):
         angle_offset = math.pi
         child_r = self.radio / 1.4
@@ -272,7 +261,7 @@ class Pez:
         self.flapping_phase = 0.0
         self.base_flapping_frequency = self.genome["flapping_freq"]
         self.base_max_thrust = self.genome["max_thrust"]
-        self.max_turn_rate = self.genome["max_turn"]
+        self.max_turn_rate = self.genome["max_turn"]  # kept but unused for visible rotation
         self.drag_coefficient = self.genome["drag"]
         self.is_chasing_food = False
         self.is_avoiding_collision = False
@@ -282,10 +271,32 @@ class Pez:
         self.stuck_counter = 0
         self.is_stuck = False
         self.wall_escape_cooldown = 0
+        self.collision_escape_cooldown = 0
         self.food_eaten = 0
         self.distance_travelled = 0.0
         self.birth_frame = 0
 
+        # kinematics
+        self.vx = math.cos(self.a) * self.speed
+        self.vy = math.sin(self.a) * self.speed
+        self.ang_vel = 0.0  # rad/s
+
+    # --- Capsule collider (segment + radius) ---
+    def body_length(self):
+        layer_scale = [0.90, 0.97, 1.05][self.layer]
+        return (22.0 * self.edad + 10.0) * layer_scale
+    def body_radius(self):
+        layer_scale = [0.85, 0.93, 1.0][self.layer]
+        return (5.5 * self.edad + 4.0) * layer_scale + CAP_EXTRA_RADIUS
+    def capsule_endpoints(self):
+        u = (math.cos(self.a), math.sin(self.a))
+        L = self.body_length() * 0.5
+        ax = self.x - u[0]*L; ay = self.y - u[1]*L
+        bx = self.x + u[0]*L; by = self.y + u[1]*L
+        r = self.body_radius()
+        return (ax, ay), (bx, by), r
+
+    # --- Rendering ---
     def color_alive(self):
         return self.genome["base_color"] if self.energia > 0 else (128,128,128)
 
@@ -345,6 +356,7 @@ class Pez:
             rt = max(int(-self.edad*0.4*(self.numeroelementos-i)*2 + 1),1)
             pc(xt,yt,rt,self.color_alive())
 
+    # --- Steering / movement / energy ---
     def apply_wall_avoidance(self):
         px, py = 0.0, 0.0
         if self.x < WALL_MARGIN: px += WALL_PUSH_MAX * (1.0 - (self.x / WALL_MARGIN))
@@ -354,17 +366,6 @@ class Pez:
         if abs(px)+abs(py) <= 1e-4: return False, self.target_angle, 0.0
         return True, math.atan2(py,px), math.hypot(px,py)
 
-    def vive(self, img, mask, quadtree, frame_count):
-        if random.random() < 0.002:
-            self.max_turn_rate = clamp(self.max_turn_rate + (random.random()-0.5)*0.002, 0.002, 0.04)
-        if self.energia > 0:
-            self.tiempo += self.avancevida
-            self.mueve(quadtree, frame_count)
-        self.energia -= 0.00003 + (self.speed * 0.00001)
-        self.edad += 0.00001
-        if self.edad > 3.0: self.energia = 0
-        if self.energia > 0: self.dibuja(img, mask)
-
     def mueve(self, quadtree, frame_count):
         self.is_avoiding_collision = False
         self.previous_positions.append((self.x, self.y))
@@ -372,7 +373,7 @@ class Pez:
         avoid_r = self.genome["perception_avoid"]
         nearby = []
         quadtree.query(Rectangle(self.x, self.y, avoid_r, avoid_r), nearby)
-        nearby = [f for f in nearby if f is not self]
+        nearby = [f for f in nearby if f is not self and f.layer == self.layer]
 
         arx = ary = 0.0; ncl = 0
         for o in nearby:
@@ -412,7 +413,7 @@ class Pez:
             if self.wall_escape_cooldown <= 0: self.wall_escape_cooldown = WALL_ESCAPE_FRAMES
 
         starving = (self.energia < 0.2)
-        escaping = (self.wall_escape_cooldown > 0)
+        escaping = (self.wall_escape_cooldown > 0) or (self.collision_escape_cooldown > 0)
         if self.is_chasing_food or self.is_avoiding_collision or self.is_stuck or starving or escaping:
             flapping_frequency = self.base_flapping_frequency * (1.6 if not escaping else 1.8)
             max_thrust = self.base_max_thrust * (1.5 if not escaping else WALL_ESCAPE_BOOST)
@@ -421,18 +422,30 @@ class Pez:
 
         self.flapping_phase += flapping_frequency * self.avancevida
         thrust = max_thrust * max(math.sin(2*math.pi*self.flapping_phase), 0)
-        drag = self.drag_coefficient * self.speed
+        drag = self.drag_coefficient * abs(self.speed)
         self.speed += thrust - drag
         self.speed = clamp(self.speed, 0, self.genome["max_speed"])
 
-        ad = angle_difference(self.a, self.target_angle)
-        if abs(ad) > self.max_turn_rate: self.a += self.max_turn_rate if ad > 0 else -self.max_turn_rate
-        else: self.a = self.target_angle
+        # --- Smooth turn with angular inertia ---
+        ad = angle_difference(self.a, self.target_angle)  # [-pi,pi]
+        escape_scale = 1.0
+        if self.wall_escape_cooldown > 0 or self.collision_escape_cooldown > 0:
+            escape_scale = 1.4  # turn a bit faster while escaping (still smooth)
+        desired_omega = clamp(ad * 2.0 * math.pi * escape_scale,
+                              -MAX_ANGULAR_SPEED*escape_scale, MAX_ANGULAR_SPEED*escape_scale)  # rad/s
+        delta_omega = desired_omega - self.ang_vel
+        max_delta = MAX_ANGULAR_ACCEL / fps
+        delta_omega = clamp(delta_omega, -max_delta, max_delta)
+        self.ang_vel += delta_omega
+        self.ang_vel = clamp(self.ang_vel, -MAX_ANGULAR_SPEED*escape_scale, MAX_ANGULAR_SPEED*escape_scale)
+        self.a += self.ang_vel / fps
         self.a = (self.a + math.pi) % (2*math.pi) - math.pi
 
+        # integrate linear motion
         dx = math.cos(self.a) * self.speed * self.edad * 5
         dy = math.sin(self.a) * self.speed * self.edad * 5
         self.x += dx; self.y += dy
+        self.vx = dx; self.vy = dy
         self.distance_travelled += math.hypot(dx, dy)
 
         out = False
@@ -440,13 +453,14 @@ class Pez:
         elif self.x > width: self.x = width; out = True
         if self.y < 0: self.y = 0; out = True
         elif self.y > height: self.y = height; out = True
-
         if out:
             cx, cy = width*0.5, height*0.5
             self.target_angle = angle_in_radians(self.x, self.y, cx, cy) + (random.random()-0.5)*0.4
             self.is_avoiding_collision = True
             self.wall_escape_cooldown = max(self.wall_escape_cooldown, WALL_ESCAPE_FRAMES//2)
+
         if self.wall_escape_cooldown > 0: self.wall_escape_cooldown -= 1
+        if self.collision_escape_cooldown > 0: self.collision_escape_cooldown -= 1
 
     def eat(self, food_obj):
         self.energia += (food_obj.radio / 10.0) * (self.genome["energy_eff"] / 0.1)
@@ -460,10 +474,24 @@ class Pez:
             child.energia = min(child.energia + 0.42, 2.2)
             fishes.append(child)
 
+    def step(self, quadtree, frame_count):
+        if random.random() < 0.002:
+            self.max_turn_rate = clamp(self.max_turn_rate + (random.random()-0.5)*0.002, 0.002, 0.04)
+        if self.energia > 0:
+            self.tiempo += self.avancevida
+            self.mueve(quadtree, frame_count)
+        self.energia -= 0.00003 + (abs(self.speed) * 0.00001)
+        self.edad += 0.00001
+        if self.edad > 3.0: self.energia = 0
+
+    def render(self, img, mask):
+        if self.energia > 0:
+            self.dibuja(img, mask)
+
 # =========================
 # Initialization
 # =========================
-numeropeces = random.randint(40, 100)
+numeropeces = random.randint(40, 80)
 peces = [Pez() for _ in range(numeropeces)]
 comidas = [Comida() for _ in range(14)]
 MAX_POP = 220
@@ -483,37 +511,205 @@ cache_back_pm = None; cache_a_back = None
 cache_mid_pm  = None; cache_a_mid  = None
 
 # =========================
+# Geometry: closest points between segments
+# =========================
+def closest_points_segments(ax,ay,bx,by, cx,cy,dx,dy):
+    """
+    Returns (px,py,qx,qy, t,u, dist, nx,ny)
+    p=A+t*(B-A) on AB, q=C+u*(D-C) on CD
+    nx,ny is (q - p) normalized (if dist>0), otherwise a symmetric fallback normal
+    """
+    abx, aby = (bx-ax), (by-ay)
+    cdx, cdy = (dx-cx), (dy-cy)
+    rpx, rpy = (ax-cx), (ay-cy)
+
+    ab2 = abx*abx + aby*aby
+    cd2 = cdx*cdx + cdy*cdy
+    eps = 1e-8
+    t = 0.0; u = 0.0
+
+    if ab2 < eps and cd2 < eps:
+        px, py = ax, ay
+        qx, qy = cx, cy
+    elif ab2 < eps:
+        u = ((ax-cx)*cdx + (ay-cy)*cdy) / (cd2 + eps)
+        u = clamp(u, 0.0, 1.0)
+        qx, qy = (cx + cdx*u, cy + cdy*u)
+        px, py = ax, ay
+    elif cd2 < eps:
+        t = ((cx-ax)*abx + (cy-ay)*aby) / (ab2 + eps)
+        t = clamp(t, 0.0, 1.0)
+        px, py = (ax + abx*t, ay + aby*t)
+        qx, qy = cx, cy
+    else:
+        A = ab2
+        B = abx*cdx + aby*cdy
+        C = cd2
+        D = abx*rpx + aby*rpy
+        E = cdx*rpx + cdy*rpy
+        denom = (A*C - B*B)
+        if abs(denom) > eps:
+            t = clamp((B*E - C*D) / denom, 0.0, 1.0)
+        else:
+            t = 0.0
+        u = (B*t + E) / (C + eps)
+        if u < 0.0:
+            u = 0.0
+            t = clamp(-D / (A + eps), 0.0, 1.0)
+        elif u > 1.0:
+            u = 1.0
+            t = clamp((B - D) / (A + eps), 0.0, 1.0)
+        px, py = (ax + abx*t, ay + aby*t)
+        qx, qy = (cx + cdx*u, cy + cdy*u)
+
+    dxn, dyn = (qx - px), (qy - py)
+    dist2 = dxn*dxn + dyn*dyn
+    dist = math.sqrt(dist2)
+    if dist > eps:
+        nx, ny = (dxn/dist, dyn/dist)
+    else:
+        # ===== Unbiased fallback normal (fixes CCW spin bias) =====
+        # 1) Try center-to-center vector
+        mx1, my1 = (ax + bx)*0.5, (ay + by)*0.5
+        mx2, my2 = (cx + dx)*0.5, (cy + dy)*0.5
+        cxn, cyn = (mx1 - mx2), (my1 - my2)
+        clen = math.hypot(cxn, cyn)
+        if clen > eps:
+            nx, ny = cxn/clen, cyn/clen
+        else:
+            # 2) Try relative direction of the segments (as a proxy for motion)
+            rvx, rvy = (abx if ab2 > eps else 0.0) - (cdx if cd2 > eps else 0.0), \
+                       (aby if ab2 > eps else 0.0) - (cdy if cd2 > eps else 0.0)
+            rlen = math.hypot(rvx, rvy)
+            if rlen > eps:
+                nx, ny = rvx/rlen, rvy/rlen
+            else:
+                # 3) Final tie-breaker: perpendicular with sign from cross product to avoid fixed CCW
+                cross = (cx-ax)*aby - (cy-ay)*abx
+                s = 1.0 if cross >= 0 else -1.0
+                nx, ny = (-aby*s, abx*s)
+                nlen = math.hypot(nx, ny) + eps
+                nx, ny = nx/nlen, ny/nlen
+    return px,py,qx,qy, t,u, dist, nx,ny
+
+# =========================
+# Collision solver (capsules + sliding + smooth rotation)
+# =========================
+def resolve_collisions_capsule(fishes, iterations=COLLISION_ITERATIONS):
+    """
+    Oriented capsule-capsule collision with sliding:
+    - find closest points on segments
+    - if distance < r_sum -> separate along normal (Baumgarte bias)
+    - remove normal component of velocity; keep tangential (slip)
+    - DO NOT snap heading; instead, nudge target + angular impulse
+    """
+    for _ in range(iterations):
+        for layer in (0,1,2):
+            boundary = Rectangle(width/2, height/2, width/2, height/2)
+            qt = Quadtree(boundary, capacity=6)
+            fs = [f for f in fishes if f.layer == layer and f.energia > 0]
+            for f in fs: qt.insert(f)
+
+            for f in fs:
+                (ax,ay),(bx,by), rf = f.capsule_endpoints()
+                search_r = f.body_length()*0.5 + f.body_radius()*2 + 8.0
+                neighbors = []
+                qt.query(Rectangle(f.x, f.y, search_r, search_r), neighbors)
+                for o in neighbors:
+                    if o is f or o.id <= f.id or o.layer != layer or o.energia <= 0:
+                        continue
+                    (cx,cy),(dx,dy), ro = o.capsule_endpoints()
+                    px,py,qx,qy, t,u, dist, nx,ny = closest_points_segments(ax,ay,bx,by, cx,cy,dx,dy)
+                    r_sum = rf + ro
+                    penetration = r_sum - dist
+                    if penetration > 0.0:
+                        corr = (penetration * (0.5 + COLLISION_BAUMGARTE))
+                        f.x -= nx * corr; f.y -= ny * corr
+                        o.x += nx * corr; o.y += ny * corr
+                        f.x = clamp(f.x, 0, width); f.y = clamp(f.y, 0, height)
+                        o.x = clamp(o.x, 0, width); o.y = clamp(o.y, 0, height)
+
+                        # --- Sliding velocities ---
+                        vfx, vfy = f.vx, f.vy
+                        vox, voy = o.vx, o.vy
+
+                        vfn = (vfx*nx + vfy*ny)                    # scalar normal component
+                        vftx, vfty = (vfx - vfn*nx, vfy - vfn*ny)   # tangential
+                        vfx2 = vftx*SLIDE_KEEP - nx * max(0.0, vfn) * NORMAL_REMOVE
+                        vfy2 = vfty*SLIDE_KEEP - ny * max(0.0, vfn) * NORMAL_REMOVE
+
+                        von = (vox*nx + voy*ny)
+                        votx, voty = (vox - von*nx, voy - von*ny)
+                        vox2 = votx*SLIDE_KEEP + nx * max(0.0, -von) * NORMAL_REMOVE
+                        voy2 = voty*SLIDE_KEEP + ny * max(0.0, -von) * NORMAL_REMOVE
+
+                        # small forward nudge to keep flow
+                        uf = (math.cos(f.a), math.sin(f.a))
+                        uo = (math.cos(o.a), math.sin(o.a))
+                        vfx2 += uf[0]*TANGENT_NUDGE; vfy2 += uf[1]*TANGENT_NUDGE
+                        vox2 += uo[0]*TANGENT_NUDGE; voy2 += uo[1]*TANGENT_NUDGE
+
+                        # damping
+                        vfx2 *= COLLISION_DAMPING; vfy2 *= COLLISION_DAMPING
+                        vox2 *= COLLISION_DAMPING; voy2 *= COLLISION_DAMPING
+
+                        # write back velocity and speed (heading will rotate smoothly)
+                        f.vx, f.vy = vfx2, vfy2
+                        o.vx, o.vy = vox2, voy2
+
+                        sf_f = max(1e-6, f.edad*5)
+                        sf_o = max(1e-6, o.edad*5)
+                        f.speed = clamp(math.hypot(vfx2, vfy2) / sf_f, 0.0, f.genome["max_speed"])
+                        o.speed = clamp(math.hypot(vox2, voy2) / sf_o, 0.0, o.genome["max_speed"])
+
+                        # steer targets away; do not snap orientation
+                        away_f = math.atan2(f.y - o.y, f.x - o.x)
+                        away_o = math.atan2(o.y - f.y, o.x - f.x)
+                        f.target_angle = away_f
+                        o.target_angle = away_o
+
+                        # small angular impulses (capped) to start rotating but keep it visible
+                        imp_f = clamp(angle_difference(f.a, away_f), -COLLISION_ANG_IMPULSE, COLLISION_ANG_IMPULSE)
+                        imp_o = clamp(angle_difference(o.a, away_o), -COLLISION_ANG_IMPULSE, COLLISION_ANG_IMPULSE)
+                        f.ang_vel += clamp(imp_f * fps * 0.15, -MAX_ANGULAR_ACCEL, MAX_ANGULAR_ACCEL) / fps
+                        o.ang_vel += clamp(imp_o * fps * 0.15, -MAX_ANGULAR_ACCEL, MAX_ANGULAR_ACCEL) / fps
+
+                        # escape boost (affects thrust/turn scaling in mover)
+                        f.collision_escape_cooldown = max(f.collision_escape_cooldown, COLLISION_ESCAPE_FRAMES)
+                        o.collision_escape_cooldown = max(o.collision_escape_cooldown, COLLISION_ESCAPE_FRAMES)
+
+# =========================
 # Main loop
 # =========================
 for frame_count in range(total_frames):
-    # Fast zeroing (reuse buffers)
+    # zero layers/masks
     layer_back.fill(0); layer_mid.fill(0); layer_front.fill(0)
     mask_back.fill(0);  mask_mid.fill(0);  mask_front.fill(0)
     LAYERS = [layer_back, layer_mid, layer_front]
     MASKS  = [mask_back, mask_mid, mask_front]
 
     # Random food spawn
-    if random.random() < 0.00002 * max(20, len(peces)):
+    if random.random() < 0.0002 * max(20, len(peces)):
         comidas.append(Comida())
 
-    # Evolve food (draw on its depth layer with mask)
+    # Evolve food
     for comida in comidas:
         comida.vive(LAYERS[comida.layer], MASKS[comida.layer])
 
-    # Quadtrees
+    # Quadtrees for perception
     boundary = Rectangle(width/2, height/2, width/2, height/2)
     fish_qt = Quadtree(boundary, capacity=6)
     for f in peces: fish_qt.insert(f)
     food_qt = Quadtree(boundary, capacity=6)
     for c in comidas: food_qt.insert(c)
 
-    # Interactions
+    # Interactions (food chase / eat / reproduce)
     for pez in peces:
         pez.is_chasing_food = False
         pr = pez.genome["perception_food"]
         seen_food = []
         food_qt.query(Rectangle(pez.x, pez.y, pr, pr), seen_food)
-        seen_food = [c for c in seen_food if c.visible]
+        seen_food = [c for c in seen_food if c.visible and c.layer == pez.layer]
         if seen_food:
             closest = min(seen_food, key=lambda c: math.hypot(pez.x - c.x, pez.y - c.y))
             pez.target_angle = angle_in_radians(pez.x, pez.y, closest.x, closest.y)
@@ -523,18 +719,26 @@ for frame_count in range(total_frames):
                 closest.visible = False; pez.eat(closest)
         pez.maybe_reproduce(peces, frame_count, MAX_POP)
 
-    # Update fish (draw to layer & mask), remove dead
-    for pez in peces[:]:
-        pez.vive(LAYERS[pez.layer], MASKS[pez.layer], fish_qt, frame_count)
-        if pez.energia <= 0: peces.remove(pez)
+    # Move (no render yet)
+    alive = []
+    for pez in peces:
+        pez.step(fish_qt, frame_count)
+        if pez.energia > 0: alive.append(pez)
+    peces = alive
 
-    # Clean up invisible food
+    # Clean food
     comidas = [c for c in comidas if c.visible]
 
-    # ===== Compose with premultiplied alpha (accelerated) =====
+    # Capsule collisions + sliding + smooth rotation
+    resolve_collisions_capsule(peces, iterations=COLLISION_ITERATIONS)
+
+    # Render after collision resolution
+    for pez in peces:
+        pez.render(LAYERS[pez.layer], MASKS[pez.layer])
+
+    # ===== Compose with premultiplied alpha =====
     frame = BG_GRADIENT.copy()
 
-    # Back (downscale + blur) — optional caching
     if (frame_count % BLUR_EVERY_N == 0) or cache_back_pm is None:
         back_pm, a_back = premult_blur_scaled(layer_back, mask_back, BACK_KSIZE, BACK_SCALE)
         a_back *= 0.65
@@ -542,7 +746,6 @@ for frame_count in range(total_frames):
     else:
         back_pm, a_back = cache_back_pm, cache_a_back
 
-    # Mid (downscale + blur) — optional caching
     if (frame_count % BLUR_EVERY_N == 0) or cache_mid_pm is None:
         mid_pm, a_mid = premult_blur_scaled(layer_mid, mask_mid, MID_KSIZE, MID_SCALE)
         a_mid *= 0.85
@@ -550,12 +753,9 @@ for frame_count in range(total_frames):
     else:
         mid_pm, a_mid = cache_mid_pm, cache_a_mid
 
-    # Front (no blur)
-    # Still premultiply (scale=1.0, ksize=1 does nothing) — cheap
     front_pm, a_front = premult_blur_scaled(layer_front, mask_front, 1, 1.0)
     a_front *= 1.0
 
-    # Alpha-over in depth order (cv2 ops)
     frame = alpha_over_pm(frame, back_pm,  a_back)
     frame = alpha_over_pm(frame, mid_pm,   a_mid)
     frame = alpha_over_pm(frame, front_pm, a_front)
