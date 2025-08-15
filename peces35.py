@@ -9,9 +9,9 @@ from collections import deque
 # =========================
 # Speed knobs (tune these)
 # =========================
-OUTPUT_W, OUTPUT_H = 1080, 1080   # <- 720p is MUCH faster than 1080p. Use (1080,1080) if you must.
+OUTPUT_W, OUTPUT_H = 1920, 1080   # <- 720p is MUCH faster than 1080p. Use (1080,1080) if you must.
 FPS = 30
-DURATION = 60
+DURATION = 60*60
 BLUR_EVERY_N = 1                 # 1 = every frame; 2 = reuse previous blur 1 frame; try 2–3 if you need more speed
 BACK_SCALE = 0.5                 # render+blur back layer at 50% size
 MID_SCALE  = 0.75                # render+blur mid layer at 75% size
